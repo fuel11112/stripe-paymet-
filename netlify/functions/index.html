@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fuel & Prep Co Menu</title>
+    <script src="https://js.stripe.com/v3/"></script>
+    <link rel="preconnect" href="https://docs.google.com" crossorigin>
+    <link rel="preconnect" href="https://images.weserv.nl" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root { --green: #2e7d32; --light-green: #c8e6c9; --red: #d32f2f; --orange: #ff9800; --dark-green: #1b5e20; }
+        *, *::before, *::after { box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        body { font-family: 'Inter', Arial, sans-serif; margin: 0; background: #f0f2f5; color: #333; line-height: 1.6; }
+        .container { width: 100%; max-width: 1200px; margin: 0 auto; padding: 1rem; }
+        header { background: var(--green); color: #fff; padding: 1.5rem; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-radius: 12px; margin-bottom: 1.5rem; }
+        .meal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1.5rem; }
+        .meal-card { border: 1px solid #ddd; border-radius: 12px; background: #fff; cursor: pointer; overflow: hidden; }
+        .btn { background: var(--green); color: #fff; border: none; padding: 0.8rem 1.5rem; margin-top: 1rem; cursor: pointer; border-radius: 8px; width: 100%; font-size: 1rem; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        .loading-overlay { position: fixed; inset: 0; background: rgba(255, 255, 255, 0.8); display: flex; align-items: center; justify-content: center; z-index: 2000; visibility: hidden; opacity: 0; transition: opacity 0.3s ease; }
+        .loading-overlay.is-visible { visibility: visible; opacity: 1; }
+        .spinner-box { width: 50px; height: 50px; border: 5px solid #ccc; border-top-color: var(--green); border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        /* Your other original CSS for modals, cart, etc. goes here */
+    </style>
+</head>
+<body>
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="spinner-box"></div>
+    </div>
+    
+    <div class="container">
+        <header><h1>Fuel & Prep Co</h1></header>
+        <div class="meal-grid" id="mealGrid"></div>
+    </div>
+
+    <div class="modal-overlay" id="checkoutModal">
+        <div class="modal-content">
+            <button class="close-btn">&times;</button>
+            <h2>Checkout</h2>
+            <form id="checkoutForm">
+                <input type="text" id="name" placeholder="Your Name" required>
+                <input type="email" id="email" placeholder="Your Email" required>
+                <input type="tel" id="phone" placeholder="Your Phone Number" required>
+                <input type="text" id="address" placeholder="Delivery Address" required>
+                <select id="deliveryDay" required>
+                    <option value="" disabled selected>Select a Delivery Day...</option>
+                    <option value="Monday">Monday</option>
+                    <option value="Tuesday">Tuesday</option>
+                </select>
+                <textarea id="notes" placeholder="Optional notes..."></textarea>
+                <div class="form-group-terms">
+                    <input type="checkbox" id="termsCheckbox" required>
+                    <label for="termsCheckbox">I agree to the T&Cs</label>
+                </div>
+                <button type="button" class="btn" id="paymentBtn">Proceed to Payment</button>
+            </form>
+        </div>
+    </div>
+    <div class="modal-overlay" id="thankyouModal">
+        <div class="modal-content">
+            <h2>🎉 Payment Successful! 🎉</h2>
+            <p>Thank you, <span id="thankYouName"></span>! A receipt has been sent to your email.</p>
+            <button class="btn" id="thankYouCloseBtn">Close</button>
+        </div>
+    </div>
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- CONFIGURATION ---
+        // ⬇️ PASTE YOUR STRIPE PUBLISHABLE KEY HERE ⬇️
+        const stripe = Stripe('pk_test_YOUR_PUBLISHABLE_KEY');
+
+        const CHECKOUT_FUNCTION_URL = '/.netlify/functions/create-checkout';
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        let cart = []; // Assume your cart logic will populate this
+
+        function loadCartFromStorage() {
+             const savedCart = localStorage.getItem('fuelPrepCart');
+             if (savedCart) {
+                try {
+                    cart = JSON.parse(savedCart);
+                } catch(e) {
+                    cart = [];
+                }
+             }
+        }
+
+        // --- PAYMENT BUTTON LOGIC ---
+        document.getElementById('paymentBtn').addEventListener('click', async () => {
+            loadCartFromStorage();
+            const customer = {
+                name: document.getElementById('name').value.trim(),
+                email: document.getElementById('email').value.trim(),
+                phone: document.getElementById('phone').value.trim(),
+                address: document.getElementById('address').value.trim(),
+                deliveryDay: document.getElementById('deliveryDay').value,
+                notes: document.getElementById('notes').value.trim()
+            };
+            if (!customer.name || !customer.email.includes('@') || !document.getElementById('termsCheckbox').checked) {
+                alert("Please fill all required fields and agree to the T&Cs.");
+                return;
+            }
+            if (cart.length === 0) {
+                alert("Your cart is empty.");
+                return;
+            }
+            
+            loadingOverlay.classList.add('is-visible');
+            const paymentBtn = document.getElementById('paymentBtn');
+            paymentBtn.disabled = true;
+
+            try {
+                const response = await fetch(CHECKOUT_FUNCTION_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ items: cart, customer: customer })
+                });
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Server error');
+                }
+                const session = await response.json();
+                localStorage.setItem('customerNameForThanks', customer.name);
+                const result = await stripe.redirectToCheckout({ sessionId: session.id });
+                if (result.error) throw new Error(result.error.message);
+            } catch (error) {
+                loadingOverlay.classList.remove('is-visible');
+                paymentBtn.disabled = false;
+                alert(`Error: ${error.message}`);
+            }
+        });
+        
+        function handlePostPayment() {
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('payment') === 'success') {
+                const customerName = localStorage.getItem('customerNameForThanks') || 'for your order';
+                document.getElementById('thankYouName').textContent = customerName;
+                document.querySelector('#checkoutModal')?.classList.remove('is-visible');
+                document.querySelector('#thankyouModal')?.classList.add('is-visible');
+                cart = [];
+                localStorage.removeItem('fuelPrepCart');
+                localStorage.removeItem('customerNameForThanks');
+                // You'll need your renderCart() function here to show the empty cart
+            } else if (urlParams.get('payment') === 'cancelled') {
+                alert('Your order was cancelled. Your cart has been saved.');
+            }
+        }
+        
+        // --- Initialize page ---
+        loadCartFromStorage();
+        handlePostPayment();
+        // You must include all your original functions here for the page to work
+        // e.g., fetchAndRenderMeals(), renderCart(), setupEventListeners(), etc.
+    });
+    </script>
+</body>
+</html>
